@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+:root {
+  --shadow-neo: 4px 4px 0px 0px #000000;
+  --shadow-neo-sm: 2px 2px 0px 0px #000000;
+  --shadow-neo-lg: 6px 6px 0px 0px #000000;
+}
+
+body {
+  background: #FFF8DC;
+  color: black;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.neo-card {
+  border: 4px solid black;
+  background: #FFF8DC;
+  box-shadow: var(--shadow-neo);
+  padding: 1.5rem;
+}
+
+.neo-card-colored {
+  border: 4px solid black;
+  box-shadow: var(--shadow-neo);
+  padding: 1.5rem;
+}
+
+.neo-badge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  border: 2px solid black;
+  font-weight: bold;
+  font-size: 0.875rem;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
