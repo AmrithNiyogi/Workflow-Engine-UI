@@ -170,7 +170,6 @@ export default function AgentCard({ agent, onEdit, onDelete, onExecute }) {
                 </button>
               </div>
             </div>
-
             <div className="neo-card-colored bg-[#90EE90] p-4 mb-4">
               <p className="font-bold text-black mb-2">📝 Instructions:</p>
               <ol className="list-decimal list-inside space-y-1 text-black font-semibold text-sm">
@@ -179,7 +178,6 @@ export default function AgentCard({ agent, onEdit, onDelete, onExecute }) {
                 <li>The widget will automatically load and connect to the agent</li>
               </ol>
             </div>
-
             <div className="flex justify-end">
               <NeoButton
                 variant="primary"
@@ -197,4 +195,3 @@ export default function AgentCard({ agent, onEdit, onDelete, onExecute }) {
     </div>
   );
 }
-

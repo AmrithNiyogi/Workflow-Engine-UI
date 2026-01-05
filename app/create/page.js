@@ -31,6 +31,7 @@ export default function CreateAgentPage() {
   const [toolConfigs, setToolConfigs] = useState({}); // { toolName: { propertyName: value } }
   const [customTools, setCustomTools] = useState([]);
   const [mcpServers, setMcpServers] = useState({});
+  const [enableShortTermPostgres, setEnableShortTermPostgres] = useState(false);
   const [tags, setTags] = useState('');
   const [maxIterations, setMaxIterations] = useState(10);
   const [timeout, setTimeout] = useState('');
@@ -55,8 +56,13 @@ export default function CreateAgentPage() {
     const fetchTools = async () => {
       setToolsLoading(true);
       const { data, error } = await listTools(0, 100);
-      if (!error && data?.tools) {
-        setAvailableTools(data.tools);
+      if (!error && data) {
+        // Handle different response structures: data.tools or data directly (array)
+        const tools = Array.isArray(data) ? data : (data.tools || data.items || []);
+        console.log('Tools response:', { data, tools, toolsLength: tools.length });
+        setAvailableTools(tools);
+      } else {
+        console.error('Error fetching tools:', error);
       }
       setToolsLoading(false);
     };
@@ -113,6 +119,13 @@ export default function CreateAgentPage() {
       frameworkConfig.mcp_servers = mcpServers;
     }
 
+    // Build memory configuration
+    const memory = enableShortTermPostgres ? {
+      short_term: {
+        type: 'short_term_postgres'
+      }
+    } : undefined;
+
     const agentData = {
       name,
       framework,
@@ -125,6 +138,7 @@ export default function CreateAgentPage() {
       },
       capabilities,
       tools: allTools,
+      memory,
       tags: tags ? tags.split(',').map(t => t.trim()).filter(t => t) : [],
       max_iterations: maxIterations,
       timeout: timeout ? parseFloat(timeout) : null,
@@ -440,6 +454,41 @@ export default function CreateAgentPage() {
               })}
             </div>
           )}
+
+          <div className="mb-4">
+            <label className="block font-bold text-black mb-2">Memory</label>
+            <div className="bg-[#87CEEB] border-4 border-black p-3 mb-3">
+              <p className="font-bold text-black text-sm mb-2">
+                💾 Memory Configuration
+              </p>
+              <p className="text-black text-xs font-semibold mb-3">
+                Enable short-term postgres memory to maintain conversation state across multiple executions using PostgreSQL checkpointing.
+              </p>
+              <label className="flex items-center border-4 border-black p-3 bg-white cursor-pointer hover:bg-[#90EE90]">
+                <input
+                  type="checkbox"
+                  checked={enableShortTermPostgres}
+                  onChange={(e) => setEnableShortTermPostgres(e.target.checked)}
+                  className="mr-3 w-5 h-5 border-2 border-black"
+                />
+                <div className="flex-1">
+                  <span className="font-bold text-black text-base block">
+                    Enable Short-Term Postgres Memory
+                  </span>
+                  <span className="text-black text-xs font-semibold block mt-1">
+                    Uses PostgreSQL to persist conversation state. Requires session_id when executing tasks.
+                  </span>
+                </div>
+              </label>
+              {enableShortTermPostgres && (
+                <div className="mt-3 bg-[#90EE90] border-2 border-black p-2">
+                  <p className="text-black text-xs font-bold">
+                    ✅ Short-term postgres memory enabled. Make sure to provide a session_id when executing tasks to maintain conversation context.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
 
           <NeoInput
             label="Tags (comma-separated)"

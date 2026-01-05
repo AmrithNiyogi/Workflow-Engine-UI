@@ -5,147 +5,7 @@ import NeoButton from './NeoButton';
 import NeoTextarea from './NeoTextarea';
 import { executeAgentWithLogs, executeAgent } from '@/lib/api';
 
-// Utility function to clean and format CrewAI observations
-const formatCrewAIObservation = (content) => {
-  // Check if this is a CrewAI observation (contains box-drawing characters)
-  const hasBoxDrawing = /[╭╮╰╯│─]/.test(content);
-  if (!hasBoxDrawing) {
-    return { isCrewAI: false, formatted: content };
-  }
-
-  // Extract content from box-drawing formatted text
-  const lines = content.split('\n');
-  const cleanedLines = [];
-  let inBox = false;
-  let lastProcessed = '';
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    
-    // Skip box-drawing lines
-    if (/^[╭╮╰╯│─\s]+$/.test(line)) {
-      continue;
-    }
-    
-    // Extract meaningful content
-    if (line.includes('Crew Execution Started')) {
-      const match = line.match(/Name:\s*([^\n│]+)/);
-      if (match) cleanedLines.push(`🚀 Crew Started: ${match[1].trim()}`);
-      continue;
-    }
-    
-    if (line.includes('Agent Started')) {
-      const agentMatch = line.match(/Agent:\s*([^\n│]+)/);
-      const taskMatch = line.match(/Task:\s*([^\n│]+)/);
-      if (agentMatch && taskMatch) {
-        cleanedLines.push(`🤖 Agent: ${agentMatch[1].trim()}`);
-        cleanedLines.push(`📋 Task: ${taskMatch[1].trim()}`);
-      }
-      continue;
-    }
-    
-    if (line.includes('Crew:') && line.includes('Task:')) {
-      const statusMatch = line.match(/Status:\s*([^\n]+)/);
-      const assignedMatch = line.match(/Assigned to:\s*([^\n]+)/);
-      if (statusMatch) {
-        const status = statusMatch[1].trim();
-        if (assignedMatch) {
-          cleanedLines.push(`📋 Task ${status} (Assigned to: ${assignedMatch[1].trim()})`);
-        } else {
-          cleanedLines.push(`📋 Task ${status}`);
-        }
-      }
-      continue;
-    }
-    
-    if (line.includes('Agent Final Answer') || line.includes('✅ Agent Final Answer')) {
-      // Extract everything after "Final Answer:" until the closing box
-      const finalAnswerIndex = content.indexOf('Final Answer:');
-      if (finalAnswerIndex !== -1) {
-        let answerSection = content.substring(finalAnswerIndex + 'Final Answer:'.length);
-        // Find closing box pattern
-        const closingIndex = answerSection.search(/╰[─╯\s]+╯/);
-        if (closingIndex !== -1) {
-          answerSection = answerSection.substring(0, closingIndex);
-        }
-        // Clean up the answer
-        const answer = answerSection
-          .replace(/[╭╮╰╯│─]/g, '')
-          .replace(/\n\s*\n+/g, '\n\n')
-          .trim();
-        if (answer && answer.length > 0) {
-          cleanedLines.push(`✅ Final Answer:\n${answer}`);
-        }
-      }
-      continue;
-    }
-    
-    if (line.includes('Crew Execution Completed') || line.includes('Crew Completion')) {
-      // Extract everything after "Final Output:" until the closing box
-      const finalOutputIndex = content.indexOf('Final Output:');
-      if (finalOutputIndex !== -1) {
-        let outputSection = content.substring(finalOutputIndex + 'Final Output:'.length);
-        // Find closing box pattern
-        const closingIndex = outputSection.search(/╰[─╯\s]+╯/);
-        if (closingIndex !== -1) {
-          outputSection = outputSection.substring(0, closingIndex);
-        }
-        // Clean up the output
-        const output = outputSection
-          .replace(/[╭╮╰╯│─]/g, '')
-          .replace(/\n\s*\n+/g, '\n\n')
-          .trim();
-        if (output && output.length > 0) {
-          cleanedLines.push(`✅ Crew Completed:\n${output}`);
-        }
-      }
-      continue;
-    }
-    
-    if (line.includes('Task Completion') && !line.includes('Crew Completion')) {
-      const taskMatch = content.match(/Name:\s*([^\n│╰]+)/);
-      const agentMatch = content.match(/Agent:\s*([^\n│╰]+)/);
-      if (taskMatch) {
-        if (agentMatch) {
-          cleanedLines.push(`✅ Task Completed: ${taskMatch[1].trim()} (Agent: ${agentMatch[1].trim()})`);
-        } else {
-          cleanedLines.push(`✅ Task Completed: ${taskMatch[1].trim()}`);
-        }
-      }
-      continue;
-    }
-    
-    if (line.includes('Tracing Status')) {
-      cleanedLines.push(`ℹ️ Tracing: ${line.includes('disabled') ? 'Disabled' : 'Enabled'}`);
-      continue;
-    }
-    
-    // For other lines, remove box characters and clean up
-    const cleaned = line.replace(/[│╭╮╰╯─]/g, '').trim();
-    if (cleaned && cleaned.length > 2 && cleaned !== lastProcessed) {
-      cleanedLines.push(cleaned);
-      lastProcessed = cleaned;
-    }
-  }
-
-  // Remove duplicates while preserving order
-  const uniqueLines = [];
-  const seen = new Set();
-  for (const line of cleanedLines) {
-    const key = line.substring(0, 50); // Use first 50 chars as key
-    if (!seen.has(key)) {
-      seen.add(key);
-      uniqueLines.push(line);
-    }
-  }
-
-  return {
-    isCrewAI: true,
-    formatted: uniqueLines.join('\n') || content.replace(/[╭╮╰╯│─]/g, '').trim()
-  };
-};
-
-export default function ChatBot({ agentId, frameworkOverride, onSendMessage, loading, useStreaming = true }) {
+export default function ChatBot({ agentId, frameworkOverride, sessionId, onSendMessage, loading, useStreaming = true }) {
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -211,6 +71,7 @@ export default function ChatBot({ agentId, frameworkOverride, onSendMessage, loa
         parameters: {},
         context: {},
         framework: frameworkOverride || null,
+        session_id: sessionId || null,
       };
 
       let finalResult = null;
@@ -255,40 +116,11 @@ export default function ChatBot({ agentId, frameworkOverride, onSendMessage, loa
                 break;
               
               case 'observation':
-                // Format the observation to check for duplicates
-                const formattedObs = formatCrewAIObservation(data.content);
-                const normalizedContent = formattedObs.formatted
-                  .replace(/\s+/g, ' ')
-                  .replace(/\n\s*\n+/g, '\n')
-                  .trim();
-                
-                // Create a hash for deduplication
-                const contentHash = normalizedContent.length > 0 
-                  ? `${normalizedContent.substring(0, 200)}_${normalizedContent.length}`
-                  : normalizedContent;
-                
-                // Check if we've already seen this observation
-                const isDuplicate = updatedLogs.some(log => {
-                  if (log.type !== 'observation') return false;
-                  const existingFormatted = formatCrewAIObservation(log.content);
-                  const existingNormalized = existingFormatted.formatted
-                    .replace(/\s+/g, ' ')
-                    .replace(/\n\s*\n+/g, '\n')
-                    .trim();
-                  const existingHash = existingNormalized.length > 0
-                    ? `${existingNormalized.substring(0, 200)}_${existingNormalized.length}`
-                    : existingNormalized;
-                  return existingHash === contentHash;
+                updatedLogs.push({
+                  type: 'observation',
+                  content: data.content,
+                  timestamp: data.timestamp,
                 });
-                
-                // Only add if it's not a duplicate
-                if (!isDuplicate) {
-                  updatedLogs.push({
-                    type: 'observation',
-                    content: data.content,
-                    timestamp: data.timestamp,
-                  });
-                }
                 break;
               
               case 'final_answer':
@@ -305,101 +137,10 @@ export default function ChatBot({ agentId, frameworkOverride, onSendMessage, loa
                   success: true,
                 };
               
-              case 'crew_started':
-                // Extract crew name from content (e.g., "Crew 'crew │' started execution")
-                const crewNameMatch = data.content?.match(/Crew\s+['"]([^'"]+)['"]/);
-                const crewName = crewNameMatch ? crewNameMatch[1].replace(/\u2502/g, '').trim() : 'crew';
-                const crewStartedContent = `🚀 Crew Started: ${crewName}`;
-                // Check for duplicates
-                const isCrewStartedDuplicate = updatedLogs.some(log => 
-                  log.type === 'crew_status' && log.content === crewStartedContent
-                );
-                if (!isCrewStartedDuplicate) {
-                  updatedLogs.push({
-                    type: 'crew_status',
-                    content: crewStartedContent,
-                    timestamp: data.timestamp,
-                  });
-                }
-                break;
-              
-              case 'agent_started':
-                // Extract agent name and task from content
-                const agentMatch = data.content?.match(/Agent\s+['"]([^'"]+)['"]/);
-                const taskMatch = data.content?.match(/task:\s*([^\n]+)/i);
-                const agentName = agentMatch ? agentMatch[1].replace(/\u2502/g, '').trim() : 'agent';
-                const taskId = taskMatch ? taskMatch[1].trim() : '';
-                const agentStartedContent = `🤖 Agent Started: ${agentName}${taskId ? `\n📋 Task: ${taskId}` : ''}`;
-                // Check for duplicates
-                const isAgentStartedDuplicate = updatedLogs.some(log => 
-                  log.type === 'crew_status' && log.content === agentStartedContent
-                );
-                if (!isAgentStartedDuplicate) {
-                  updatedLogs.push({
-                    type: 'crew_status',
-                    content: agentStartedContent,
-                    timestamp: data.timestamp,
-                  });
-                }
-                break;
-              
-              case 'task_completed':
-                // Extract task and agent info
-                const taskCompletedMatch = data.content?.match(/Task\s+['"]([^'"]*)['"]/);
-                const agentCompletedMatch = data.content?.match(/agent\s+['"]([^'"]+)['"]/i);
-                const completedTask = taskCompletedMatch ? taskCompletedMatch[1].replace(/\u2502/g, '').trim() : 'task';
-                const completedAgent = agentCompletedMatch ? agentCompletedMatch[1].replace(/\u2502/g, '').trim() : '';
-                const taskCompletedContent = `✅ Task Completed: ${completedTask}${completedAgent ? ` (Agent: ${completedAgent})` : ''}`;
-                // Check for duplicates
-                const isTaskCompletedDuplicate = updatedLogs.some(log => 
-                  log.type === 'crew_status' && log.content === taskCompletedContent
-                );
-                if (!isTaskCompletedDuplicate) {
-                  updatedLogs.push({
-                    type: 'crew_status',
-                    content: taskCompletedContent,
-                    timestamp: data.timestamp,
-                  });
-                }
-                break;
-              
-              case 'crew_completed':
-                // Extract the final output/content
-                const crewContent = data.content || '';
-                // Clean up box-drawing characters if present
-                const cleanedContent = crewContent.replace(/\u2502/g, '').trim();
-                const crewCompletedContent = `✅ Crew Completed:\n${cleanedContent}`;
-                // Check for duplicates (compare first 100 chars to avoid full content comparison)
-                const isCrewCompletedDuplicate = updatedLogs.some(log => {
-                  if (log.type !== 'crew_status') return false;
-                  const logStart = log.content.substring(0, 100);
-                  const newStart = crewCompletedContent.substring(0, 100);
-                  return logStart === newStart && log.content.length === crewCompletedContent.length;
-                });
-                if (!isCrewCompletedDuplicate) {
-                  updatedLogs.push({
-                    type: 'crew_status',
-                    content: crewCompletedContent,
-                    timestamp: data.timestamp,
-                  });
-                  // Also update the main message content if it contains the result
-                  if (cleanedContent && cleanedContent.length > 20) {
-                    return {
-                      ...msg,
-                      content: cleanedContent,
-                      thinkingLogs: updatedLogs,
-                      loading: false,
-                      success: true,
-                    };
-                  }
-                }
-                break;
-              
               case 'complete':
                 if (data.success && data.result && !data.error) {
                   return {
                     ...msg,
-                    content: data.result,
                     loading: false,
                     success: true,
                     thinkingLogs: updatedLogs,
@@ -413,36 +154,6 @@ export default function ChatBot({ agentId, frameworkOverride, onSendMessage, loa
                     thinkingLogs: updatedLogs,
                   };
                 }
-                break;
-              
-              case 'tool_input':
-                updatedLogs.push({
-                  type: 'tool_input',
-                  content: data.content,
-                  tool: data.metadata?.tool || data.tool,
-                  input: data.metadata?.input || data.input,
-                  timestamp: data.timestamp,
-                });
-                break;
-              
-              case 'tool_output':
-                updatedLogs.push({
-                  type: 'tool_output',
-                  content: data.content,
-                  tool: data.metadata?.tool || data.tool,
-                  output: data.metadata?.output || data.output,
-                  timestamp: data.timestamp,
-                });
-                break;
-              
-              case 'tool_error':
-                updatedLogs.push({
-                  type: 'tool_error',
-                  content: data.content,
-                  tool: data.metadata?.tool || data.tool,
-                  error: data.metadata?.error || data.error,
-                  timestamp: data.timestamp,
-                });
                 break;
               
               case 'error':
@@ -501,6 +212,7 @@ export default function ChatBot({ agentId, frameworkOverride, onSendMessage, loa
         parameters: {},
         context: {},
         framework: frameworkOverride || null,
+        session_id: sessionId || null,
       };
 
       // Use executeAgent API (without logs)
@@ -626,6 +338,7 @@ export default function ChatBot({ agentId, frameworkOverride, onSendMessage, loa
                       {new Date(msg.timestamp).toLocaleTimeString()}
                     </span>
                   </div>
+
                   {/* Thinking Logs Section (inline within message) */}
                   {msg.thinkingLogs && msg.thinkingLogs.length > 0 && (
                     <div className="mb-3 p-3 bg-gradient-to-r from-black/5 to-black/10 border-2 border-black/30 rounded-md shadow-sm">
@@ -684,85 +397,12 @@ export default function ChatBot({ agentId, frameworkOverride, onSendMessage, loa
                                 </div>
                               </div>
                             )}
-                            {log.type === 'observation' && (() => {
-                              const formatted = formatCrewAIObservation(log.content);
-                              return (
-                                <div className="flex items-start gap-2">
-                                  <span className="font-bold text-purple-700 flex-shrink-0 text-base">👁️</span>
-                                  <div className="flex-1 min-w-0">
-                                    <span className="font-bold text-purple-700">
-                                      {formatted.isCrewAI ? 'CrewAI Status:' : 'Observation:'}
-                                    </span>{' '}
-                                    {formatted.isCrewAI ? (
-                                      <div className="mt-1 font-mono text-xs bg-gradient-to-r from-purple-50 to-purple-100 p-3 rounded-md border-2 border-purple-300 whitespace-pre-wrap break-words shadow-sm">
-                                        <div className="text-purple-800 leading-relaxed">
-                                          {formatted.formatted}
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <span className="font-semibold break-words">{formatted.formatted}</span>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })()}
-                            {log.type === 'crew_status' && (
+                            {log.type === 'observation' && (
                               <div className="flex items-start gap-2">
-                                <span className="font-bold text-purple-700 flex-shrink-0 text-base">🚀</span>
+                                <span className="font-bold text-purple-700 flex-shrink-0 text-base">👁️</span>
                                 <div className="flex-1 min-w-0">
-                                  <div className="mt-1 font-mono text-xs bg-gradient-to-r from-purple-50 to-purple-100 p-3 rounded-md border-2 border-purple-300 whitespace-pre-wrap break-words shadow-sm">
-                                    <div className="text-purple-800 leading-relaxed">
-                                      {log.content}
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                            {log.type === 'tool_input' && (
-                              <div className="flex items-start gap-2">
-                                <span className="font-bold text-orange-700 flex-shrink-0 text-base">📥</span>
-                                <div className="flex-1 min-w-0">
-                                  <span className="font-bold text-orange-700">Tool Input:</span>{' '}
-                                  {log.tool && (
-                                    <span className="text-xs ml-2 opacity-70 bg-orange-100 px-1.5 py-0.5 rounded border border-orange-300">
-                                      {log.tool}
-                                    </span>
-                                  )}
-                                  <div className="mt-1 font-mono text-xs bg-orange-50 px-2 py-1 rounded border border-orange-200 whitespace-pre-wrap break-words">
-                                    {log.input ? (typeof log.input === 'string' ? log.input : JSON.stringify(log.input, null, 2)) : log.content}
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                            {log.type === 'tool_output' && (
-                              <div className="flex items-start gap-2">
-                                <span className="font-bold text-green-700 flex-shrink-0 text-base">📤</span>
-                                <div className="flex-1 min-w-0">
-                                  <span className="font-bold text-green-700">Tool Output:</span>{' '}
-                                  {log.tool && (
-                                    <span className="text-xs ml-2 opacity-70 bg-green-100 px-1.5 py-0.5 rounded border border-green-300">
-                                      {log.tool}
-                                    </span>
-                                  )}
-                                  <div className="mt-1 font-mono text-xs bg-green-50 px-2 py-1 rounded border border-green-200 whitespace-pre-wrap break-words">
-                                    {log.output ? (typeof log.output === 'string' ? log.output : JSON.stringify(log.output, null, 2)) : log.content}
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-                            {log.type === 'tool_error' && (
-                              <div className="flex items-start gap-2">
-                                <span className="font-bold text-red-700 flex-shrink-0 text-base">❌</span>
-                                <div className="flex-1 min-w-0">
-                                  <span className="font-bold text-red-700">Tool Error:</span>{' '}
-                                  {log.tool && (
-                                    <span className="text-xs ml-2 opacity-70 bg-red-100 px-1.5 py-0.5 rounded border border-red-300">
-                                      {log.tool}
-                                    </span>
-                                  )}
-                                  <div className="mt-1 font-mono text-xs bg-red-50 px-2 py-1 rounded border border-red-200 whitespace-pre-wrap break-words">
-                                    {log.error ? (typeof log.error === 'string' ? log.error : JSON.stringify(log.error, null, 2)) : log.content}
-                                  </div>
+                                  <span className="font-bold text-purple-700">Observation:</span>{' '}
+                                  <span className="font-semibold break-words">{log.content}</span>
                                 </div>
                               </div>
                             )}
@@ -833,4 +473,3 @@ export default function ChatBot({ agentId, frameworkOverride, onSendMessage, loa
     </div>
   );
 }
-

@@ -14,6 +14,7 @@ function ExecutePageContent() {
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [frameworkOverride, setFrameworkOverride] = useState('');
+  const [sessionId, setSessionId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -53,6 +54,7 @@ function ExecutePageContent() {
         parameters: {},
         context: {},
         framework: frameworkOverride || null,
+        session_id: sessionId || null,
       };
 
       const { data, error: apiError } = await executeAgent(selectedAgentId, executeRequest);
@@ -105,6 +107,41 @@ function ExecutePageContent() {
             />
           </div>
 
+          <div className="mt-4">
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={sessionId}
+                onChange={(e) => setSessionId(e.target.value)}
+                placeholder="Session ID (optional - for conversation state persistence)"
+                className="flex-1 px-4 py-2 border-4 border-black bg-[#FFF8DC] text-black font-semibold focus:outline-none focus:ring-4 focus:ring-[#87CEEB]"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  // Generate a new session ID
+                  const newSessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                  setSessionId(newSessionId);
+                }}
+                className="px-4 py-2 border-4 border-black bg-[#90EE90] text-black font-bold hover:bg-[#7ED87E] transition-colors"
+              >
+                🆔 Generate
+              </button>
+              {sessionId && (
+                <button
+                  type="button"
+                  onClick={() => setSessionId('')}
+                  className="px-4 py-2 border-4 border-black bg-[#FFB6C1] text-black font-bold hover:bg-[#FF9BB0] transition-colors"
+                >
+                  🗑️ Clear
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-black mt-2 font-semibold">
+              💡 Session ID maintains conversation state across multiple messages. Leave empty for stateless conversations.
+            </p>
+          </div>
+
           {selectedAgent && (
             <div className="neo-card-colored bg-[#90EE90] mt-4 p-4">
               <p className="font-bold text-black mb-2">📋 Selected Agent Info:</p>
@@ -133,6 +170,7 @@ function ExecutePageContent() {
           <ChatBot
             agentId={selectedAgentId}
             frameworkOverride={frameworkOverride}
+            sessionId={sessionId}
             onSendMessage={handleSendMessage}
             loading={loading}
             useStreaming={true}

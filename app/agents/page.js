@@ -30,6 +30,7 @@ export default function AgentsPage() {
   const [editCapabilities, setEditCapabilities] = useState([]);
   const [editTools, setEditTools] = useState([]);
   const [editToolConfigs, setEditToolConfigs] = useState({}); // { toolName: { propertyName: value } }
+  const [editEnableShortTermPostgres, setEditEnableShortTermPostgres] = useState(false);
   const [editTags, setEditTags] = useState('');
   const [editMaxIterations, setEditMaxIterations] = useState(10);
   const [editStatus, setEditStatus] = useState('draft');
@@ -48,8 +49,10 @@ export default function AgentsPage() {
     const fetchTools = async () => {
       setToolsLoading(true);
       const { data, error } = await listTools(0, 100);
-      if (!error && data?.tools) {
-        setAvailableTools(data.tools);
+      if (!error && data) {
+        // Handle different response structures: data.tools or data directly (array)
+        const tools = Array.isArray(data) ? data : (data.tools || data.items || []);
+        setAvailableTools(tools);
       }
       setToolsLoading(false);
     };
@@ -92,6 +95,7 @@ export default function AgentsPage() {
     
     setEditTools(toolNames);
     setEditToolConfigs(toolConfigs);
+    setEditEnableShortTermPostgres(agent.memory?.short_term?.type === 'short_term_postgres');
     setEditTags(agent.tags?.join(', ') || '');
     setEditMaxIterations(agent.max_iterations || 10);
     setEditStatus(agent.status || 'draft');
@@ -119,6 +123,13 @@ export default function AgentsPage() {
       return toolName;
     });
 
+    // Build memory configuration
+    const memory = editEnableShortTermPostgres ? {
+      short_term: {
+        type: 'short_term_postgres'
+      }
+    } : undefined;
+
     const updateData = {
       name: editName,
       framework: editFramework,
@@ -131,6 +142,7 @@ export default function AgentsPage() {
       },
       capabilities: editCapabilities,
       tools: allTools,
+      memory,
       tags: editTags ? editTags.split(',').map(t => t.trim()).filter(t => t) : [],
       max_iterations: editMaxIterations,
       status: editStatus,
@@ -450,6 +462,41 @@ export default function AgentsPage() {
                           })}
                         </div>
                       )}
+
+                      <div className="mb-4">
+                        <label className="block font-bold text-black mb-2">Memory</label>
+                        <div className="bg-[#87CEEB] border-4 border-black p-3 mb-3">
+                          <p className="font-bold text-black text-sm mb-2">
+                            💾 Memory Configuration
+                          </p>
+                          <p className="text-black text-xs font-semibold mb-3">
+                            Enable short-term postgres memory to maintain conversation state across multiple executions using PostgreSQL checkpointing.
+                          </p>
+                          <label className="flex items-center border-4 border-black p-3 bg-white cursor-pointer hover:bg-[#90EE90]">
+                            <input
+                              type="checkbox"
+                              checked={editEnableShortTermPostgres}
+                              onChange={(e) => setEditEnableShortTermPostgres(e.target.checked)}
+                              className="mr-3 w-5 h-5 border-2 border-black"
+                            />
+                            <div className="flex-1">
+                              <span className="font-bold text-black text-base block">
+                                Enable Short-Term Postgres Memory
+                              </span>
+                              <span className="text-black text-xs font-semibold block mt-1">
+                                Uses PostgreSQL to persist conversation state. Requires session_id when executing tasks.
+                              </span>
+                            </div>
+                          </label>
+                          {editEnableShortTermPostgres && (
+                            <div className="mt-3 bg-[#90EE90] border-2 border-black p-2">
+                              <p className="text-black text-xs font-bold">
+                                ✅ Short-term postgres memory enabled. Make sure to provide a session_id when executing tasks to maintain conversation context.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
 
                       <h3 className="text-xl font-black text-black mt-6 mb-4 border-b-4 border-black pb-2">
                         Agent Metadata
