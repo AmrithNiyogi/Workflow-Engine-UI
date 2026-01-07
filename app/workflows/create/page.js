@@ -20,8 +20,8 @@ import NeoButton from '@/components/NeoButton';
 import NeoInput from '@/components/NeoInput';
 import NeoTextarea from '@/components/NeoTextarea';
 import NeoSelect from '@/components/NeoSelect';
-import { listAgents, createWorkflow, updateWorkflow, getWorkflow, createExecution, getExecution, executeWorkflowWithSSE } from '@/lib/api';
-import { WORKFLOW_PATTERNS } from '@/lib/constants';
+import { listAgents, createWorkflow, updateWorkflow, getWorkflow, createExecution, getExecution, executeWorkflowWithSSE, updateAgent, listTools } from '@/lib/api';
+import { WORKFLOW_PATTERNS, FRAMEWORKS, CAPABILITIES } from '@/lib/constants';
 
 const nodeTypes = {
   agent: AgentNode,
@@ -56,9 +56,31 @@ export default function CreateWorkflowPage() {
   const [executionEvents, setExecutionEvents] = useState([]); // Real-time execution events
   
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Agent editing state
+  const [editingAgent, setEditingAgent] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editFramework, setEditFramework] = useState('langchain');
+  const [editSystemPrompt, setEditSystemPrompt] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editModel, setEditModel] = useState('');
+  const [editTemperature, setEditTemperature] = useState(0.7);
+  const [editMaxTokens, setEditMaxTokens] = useState('');
+  const [editCapabilities, setEditCapabilities] = useState([]);
+  const [editTools, setEditTools] = useState([]);
+  const [editToolConfigs, setEditToolConfigs] = useState({});
+  const [editEnableShortTermPostgres, setEditEnableShortTermPostgres] = useState(false);
+  const [editTags, setEditTags] = useState('');
+  const [editMaxIterations, setEditMaxIterations] = useState(10);
+  const [editStatus, setEditStatus] = useState('draft');
+  const [editOwner, setEditOwner] = useState('');
+  const [editCategory, setEditCategory] = useState('');
+  const [availableTools, setAvailableTools] = useState([]);
+  const [toolsLoading, setToolsLoading] = useState(true);
 
   useEffect(() => {
     loadAgents();
+    loadTools();
     
     // Load workflow from URL if workflowId is provided
     const workflowIdParam = searchParams.get('workflowId');
@@ -172,6 +194,16 @@ export default function CreateWorkflowPage() {
     setLoading(false);
   };
 
+  const loadTools = async () => {
+    setToolsLoading(true);
+    const { data, error } = await listTools(0, 100);
+    if (!error && data) {
+      const tools = Array.isArray(data) ? data : (data.tools || data.items || []);
+      setAvailableTools(tools);
+    }
+    setToolsLoading(false);
+  };
+
   // Stable callback functions for node updates
   const handleTaskChange = useCallback((nodeId, task) => {
     setNodes((nds) => {
@@ -195,6 +227,127 @@ export default function CreateWorkflowPage() {
     setNodes((nds) => nds.filter((node) => node.id !== nodeId));
     setEdges((eds) => eds.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
   }, [setNodes, setEdges]);
+
+  const handleNodeEdit = useCallback((nodeId, agentId) => {
+    const agent = agents.find(a => a.id === agentId);
+    if (!agent) {
+      setError(`Agent with ID ${agentId} not found`);
+      return;
+    }
+
+    setEditingAgent(agent);
+    setEditName(agent.name || '');
+    setEditFramework(agent.framework || 'langchain');
+    setEditSystemPrompt(agent.system_prompt || '');
+    setEditDescription(agent.description || '');
+    setEditModel(agent.llm_config?.model || '');
+    setEditTemperature(agent.llm_config?.temperature || 0.7);
+    setEditMaxTokens(agent.llm_config?.max_tokens?.toString() || '');
+    setEditCapabilities(agent.capabilities || []);
+    
+    // Parse tools - can be strings or objects with name and config
+    const tools = agent.tools || [];
+    const toolNames = tools.map(t => typeof t === 'string' ? t : t.name);
+    const toolConfigs = {};
+    tools.forEach(t => {
+      if (typeof t === 'object' && t.name && t.config) {
+        toolConfigs[t.name] = t.config;
+      }
+    });
+    
+    setEditTools(toolNames);
+    setEditToolConfigs(toolConfigs);
+    setEditEnableShortTermPostgres(agent.memory?.short_term?.type === 'short_term_postgres');
+    setEditTags(agent.tags?.join(', ') || '');
+    setEditMaxIterations(agent.max_iterations || 10);
+    setEditStatus(agent.status || 'draft');
+    setEditOwner(agent.owner || '');
+    setEditCategory(agent.category || '');
+  }, [agents]);
+
+  const handleSaveAgent = async (e) => {
+    e.preventDefault();
+    if (!editingAgent) return;
+
+    setSaving(true);
+    setError(null);
+
+    // Build tools array - strings for tools without properties, objects for tools with properties
+    const allTools = editTools.map(toolName => {
+      const toolConfig = editToolConfigs[toolName];
+      const tool = availableTools.find(t => t.name === toolName);
+      
+      // If tool has properties and config exists, return object with name and config
+      if (tool && tool.properties && Object.keys(tool.properties).length > 0 && toolConfig && Object.keys(toolConfig).length > 0) {
+        return {
+          name: toolName,
+          config: toolConfig
+        };
+      }
+      // Otherwise return as string
+      return toolName;
+    });
+
+    // Build memory configuration
+    const memory = editEnableShortTermPostgres ? {
+      short_term: {
+        type: 'short_term_postgres'
+      }
+    } : undefined;
+
+    const updateData = {
+      name: editName,
+      framework: editFramework,
+      system_prompt: editSystemPrompt,
+      description: editDescription || null,
+      llm_config: {
+        model: editModel,
+        temperature: editTemperature,
+        max_tokens: editMaxTokens ? parseInt(editMaxTokens) : null,
+      },
+      capabilities: editCapabilities,
+      tools: allTools,
+      memory,
+      tags: editTags ? editTags.split(',').map(t => t.trim()).filter(t => t) : [],
+      max_iterations: editMaxIterations,
+      status: editStatus,
+      owner: editOwner,
+      category: editCategory,
+    };
+
+    const { error: apiError } = await updateAgent(editingAgent.id, updateData);
+
+    setSaving(false);
+
+    if (apiError) {
+      setError(apiError);
+    } else {
+      setEditingAgent(null);
+      setSuccess('Agent updated successfully!');
+      setTimeout(() => setSuccess(null), 3000);
+      // Reload agents to get updated data
+      const { data: agentsData } = await listAgents();
+      if (agentsData?.agents) {
+        setAgents(agentsData.agents);
+        // Update nodes with new agent data
+        setNodes((nds) => {
+          return nds.map((node) => {
+            if (node.data.agentId === editingAgent.id) {
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  agentName: updateData.name,
+                  framework: updateData.framework,
+                },
+              };
+            }
+            return node;
+          });
+        });
+      }
+    }
+  };
 
   const onConnect = useCallback(
     (params) => {
@@ -244,12 +397,13 @@ export default function CreateWorkflowPage() {
           task: '',
           onTaskChange: handleTaskChange,
           onDelete: handleNodeDelete,
+          onEdit: handleNodeEdit,
         },
       };
 
       setNodes((nds) => nds.concat(newNode));
     },
-    [reactFlowInstance, setNodes, handleTaskChange, handleNodeDelete]
+    [reactFlowInstance, setNodes, handleTaskChange, handleNodeDelete, handleNodeEdit]
   );
 
   const onDragStart = (event, agent) => {
@@ -334,12 +488,18 @@ export default function CreateWorkflowPage() {
     const steps = convertToWorkflowSteps();
     const agentIds = [...new Set(nodes.map(node => node.data.agentId))];
 
+    // Backend expects agents as an array of strings (agent IDs), not objects
+    const agentsData = agentIds.filter(id => id); // Filter out any null/undefined values
+
+    // Ensure steps is always a valid array
+    const validSteps = Array.isArray(steps) ? steps : [];
+
     const workflowData = {
       name: workflowName,
       description: workflowDescription || null,
       pattern: workflowPattern,
-      agents: agentIds,
-      steps: steps,
+      agents: agentsData,
+      steps: validSteps,
       visual_data: {
         nodes: nodes.map(node => ({
           id: node.id,
@@ -358,8 +518,8 @@ export default function CreateWorkflowPage() {
           target: edge.target,
         })),
       },
-      timeout: null,
-      max_retries: 3,
+      timeout: null, // Set to null instead of 0, or use a default value > 0
+      max_retries: workflowId ? 0 : 3,
       error_handling: 'stop',
     };
 
@@ -574,6 +734,7 @@ export default function CreateWorkflowPage() {
             ...node.data,
             onTaskChange: handleTaskChange,
             onDelete: handleNodeDelete,
+            onEdit: handleNodeEdit,
           },
         }));
         setNodes(restoredNodes);
@@ -850,6 +1011,308 @@ export default function CreateWorkflowPage() {
           </div>
         </div>
       </div>
+
+      {/* Agent Edit Modal */}
+      {editingAgent && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="neo-card-colored bg-[#FFD700] max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex justify-between items-center mb-4 border-b-4 border-black pb-2 px-4 pt-4">
+              <h2 className="text-3xl font-black text-black">
+                Edit Agent: {editingAgent.name}
+              </h2>
+              <NeoButton
+                type="button"
+                variant="danger"
+                onClick={() => setEditingAgent(null)}
+                className="text-sm"
+              >
+                ✕ Close
+              </NeoButton>
+            </div>
+
+            <form onSubmit={handleSaveAgent} className="flex-1 overflow-y-auto px-4 pb-4">
+              <h3 className="text-xl font-black text-black mb-4 border-b-4 border-black pb-2">
+                Basic Information
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <NeoInput
+                  label="Agent Name"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  required
+                />
+                <NeoSelect
+                  label="Framework"
+                  value={editFramework}
+                  onChange={(e) => setEditFramework(e.target.value)}
+                  options={FRAMEWORKS.map(f => ({ value: f, label: f }))}
+                  required
+                />
+              </div>
+
+              <NeoTextarea
+                label="Description"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                rows={2}
+              />
+
+              <NeoTextarea
+                label="System Prompt"
+                value={editSystemPrompt}
+                onChange={(e) => setEditSystemPrompt(e.target.value)}
+                required
+                rows={4}
+              />
+
+              <h3 className="text-xl font-black text-black mt-6 mb-4 border-b-4 border-black pb-2">
+                LLM Configuration
+              </h3>
+              <p className="text-black font-semibold mb-4 text-sm">
+                Note: Provider, Base URL, and API Key are automatically configured from environment variables.
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <NeoInput
+                  label="Model"
+                  value={editModel}
+                  onChange={(e) => setEditModel(e.target.value)}
+                  required
+                />
+                <div>
+                  <label className="block font-bold text-black mb-2">
+                    Temperature: {editTemperature}
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={editTemperature}
+                    onChange={(e) => setEditTemperature(parseFloat(e.target.value))}
+                    className="w-full border-4 border-black"
+                  />
+                </div>
+              </div>
+
+              <NeoInput
+                label="Max Tokens"
+                type="number"
+                value={editMaxTokens}
+                onChange={(e) => setEditMaxTokens(e.target.value)}
+              />
+
+              <div className="mb-4 mt-6">
+                <label className="block font-bold text-black mb-2">Capabilities</label>
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                  {CAPABILITIES.map((cap) => (
+                    <label key={cap} className="flex items-center border-4 border-black p-2 bg-white cursor-pointer hover:bg-[#90EE90]">
+                      <input
+                        type="checkbox"
+                        checked={editCapabilities.includes(cap)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setEditCapabilities([...editCapabilities, cap]);
+                          } else {
+                            setEditCapabilities(editCapabilities.filter(c => c !== cap));
+                          }
+                        }}
+                        className="mr-2 w-4 h-4 border-2 border-black"
+                      />
+                      <span className="font-semibold text-black text-sm">{cap}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <label className="block font-bold text-black mb-2">Tools</label>
+                {toolsLoading ? (
+                  <div className="neo-card p-4">
+                    <p className="text-black font-semibold">Loading tools...</p>
+                  </div>
+                ) : availableTools.length === 0 ? (
+                  <div className="neo-card-colored bg-[#FFD700] p-3">
+                    <p className="font-bold text-black text-sm">No tools available.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+                    {availableTools.map((tool) => (
+                      <label key={tool.name} className="flex items-start border-4 border-black p-3 bg-white cursor-pointer hover:bg-[#FFC0CB]">
+                        <input
+                          type="checkbox"
+                          checked={editTools.includes(tool.name)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setEditTools([...editTools, tool.name]);
+                              if (tool.properties && Object.keys(tool.properties).length > 0) {
+                                setEditToolConfigs(prev => ({
+                                  ...prev,
+                                  [tool.name]: {}
+                                }));
+                              }
+                            } else {
+                              setEditTools(editTools.filter(t => t !== tool.name));
+                              setEditToolConfigs(prev => {
+                                const newConfigs = { ...prev };
+                                delete newConfigs[tool.name];
+                                return newConfigs;
+                              });
+                            }
+                          }}
+                          className="mr-2 mt-1 w-4 h-4 border-2 border-black flex-shrink-0"
+                        />
+                        <div className="flex-1">
+                          <span className="font-semibold text-black text-sm block">{tool.name}</span>
+                          {tool.description && (
+                            <span className="text-xs text-gray-700 block mt-1">{tool.description}</span>
+                          )}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Tool Configuration */}
+              {editTools.filter(toolName => {
+                const tool = availableTools.find(t => t.name === toolName);
+                return tool && tool.properties && Object.keys(tool.properties).length > 0;
+              }).length > 0 && (
+                <div className="mb-4 mt-6">
+                  <h3 className="text-xl font-black text-black mb-4 border-b-4 border-black pb-2">
+                    Tool Configuration
+                  </h3>
+                  {editTools.map(toolName => {
+                    const tool = availableTools.find(t => t.name === toolName);
+                    if (!tool || !tool.properties || Object.keys(tool.properties).length === 0) {
+                      return null;
+                    }
+                    return (
+                      <div key={toolName} className="mb-6 p-4 border-4 border-black bg-white">
+                        <h4 className="font-bold text-black mb-3 text-lg">{tool.name} Properties</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {Object.entries(tool.properties).map(([propName, propDef]) => {
+                            const propType = propDef?.type || 'string';
+                            const currentValue = editToolConfigs[toolName]?.[propName] || '';
+                            return (
+                              <div key={propName}>
+                                {propType === 'password' ? (
+                                  <NeoInput
+                                    label={propName}
+                                    type="password"
+                                    value={currentValue}
+                                    onChange={(e) => {
+                                      setEditToolConfigs(prev => ({
+                                        ...prev,
+                                        [toolName]: {
+                                          ...prev[toolName],
+                                          [propName]: e.target.value
+                                        }
+                                      }));
+                                    }}
+                                  />
+                                ) : (
+                                  <NeoInput
+                                    label={propName}
+                                    type="text"
+                                    value={currentValue}
+                                    onChange={(e) => {
+                                      setEditToolConfigs(prev => ({
+                                        ...prev,
+                                        [toolName]: {
+                                          ...prev[toolName],
+                                          [propName]: e.target.value
+                                        }
+                                      }));
+                                    }}
+                                  />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="mb-4">
+                <label className="block font-bold text-black mb-2">Memory</label>
+                <div className="bg-[#87CEEB] border-4 border-black p-3 mb-3">
+                  <label className="flex items-center border-4 border-black p-3 bg-white cursor-pointer hover:bg-[#90EE90]">
+                    <input
+                      type="checkbox"
+                      checked={editEnableShortTermPostgres}
+                      onChange={(e) => setEditEnableShortTermPostgres(e.target.checked)}
+                      className="mr-3 w-5 h-5 border-2 border-black"
+                    />
+                    <span className="font-bold text-black text-base">
+                      Enable Short-Term Postgres Memory
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <NeoInput
+                  label="Tags (comma-separated)"
+                  value={editTags}
+                  onChange={(e) => setEditTags(e.target.value)}
+                />
+                <NeoInput
+                  label="Max Iterations"
+                  type="number"
+                  value={editMaxIterations}
+                  onChange={(e) => setEditMaxIterations(parseInt(e.target.value) || 10)}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <NeoSelect
+                  label="Status"
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value)}
+                  options={[
+                    { value: 'draft', label: 'Draft' },
+                    { value: 'active', label: 'Active' },
+                  ]}
+                />
+                <NeoInput
+                  label="Owner"
+                  value={editOwner}
+                  onChange={(e) => setEditOwner(e.target.value)}
+                  required
+                />
+                <NeoInput
+                  label="Category"
+                  value={editCategory}
+                  onChange={(e) => setEditCategory(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="flex gap-2 justify-end mt-6 border-t-4 border-black pt-4">
+                <NeoButton
+                  type="button"
+                  variant="danger"
+                  onClick={() => setEditingAgent(null)}
+                >
+                  Cancel
+                </NeoButton>
+                <NeoButton
+                  type="submit"
+                  variant="success"
+                  disabled={saving}
+                >
+                  {saving ? 'Saving...' : '💾 Save Agent'}
+                </NeoButton>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

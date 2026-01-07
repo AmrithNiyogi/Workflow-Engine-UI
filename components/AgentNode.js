@@ -27,6 +27,13 @@ function AgentNode({ id, data, selected }) {
     }
   };
 
+  const handleEdit = () => {
+    if (data.onEdit) {
+      // Use the node's id prop, not data.id
+      data.onEdit(id, data.agentId);
+    }
+  };
+
   return (
     <div
       className={`neo-card-colored bg-[#87CEEB] min-w-[250px] ${
@@ -36,14 +43,26 @@ function AgentNode({ id, data, selected }) {
       <div className="mb-2">
         <div className="flex items-center justify-between mb-2">
           <h3 className="font-black text-black text-lg">{data.agentName}</h3>
-          {data.onDelete && (
-            <button
-              onClick={handleDelete}
-              className="px-2 py-1 bg-[#FFB6C1] border-2 border-black font-bold text-black text-xs hover:bg-[#FF9CA8]"
-            >
-              ✕
-            </button>
-          )}
+          <div className="flex gap-1">
+            {data.onEdit && (
+              <button
+                onClick={handleEdit}
+                className="px-2 py-1 bg-[#90EE90] border-2 border-black font-bold text-black text-xs hover:bg-[#7FDD7F]"
+                title="Edit Agent"
+              >
+                ✏️
+              </button>
+            )}
+            {data.onDelete && (
+              <button
+                onClick={handleDelete}
+                className="px-2 py-1 bg-[#FFB6C1] border-2 border-black font-bold text-black text-xs hover:bg-[#FF9CA8]"
+                title="Delete Node"
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </div>
         <p className="text-xs text-black font-semibold mb-2">
           Framework: {data.framework}
