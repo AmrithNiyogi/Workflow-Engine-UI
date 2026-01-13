@@ -32,10 +32,12 @@ export default function AgentsPage() {
   const [editToolConfigs, setEditToolConfigs] = useState({}); // { toolName: { propertyName: value } }
   const [editEnableShortTermPostgres, setEditEnableShortTermPostgres] = useState(false);
   const [editTags, setEditTags] = useState('');
-  const [editMaxIterations, setEditMaxIterations] = useState(10);
+  const [editMaxIterations, setEditMaxIterations] = useState(5);
+  const [editTimeout, setEditTimeout] = useState('');
   const [editStatus, setEditStatus] = useState('draft');
   const [editOwner, setEditOwner] = useState('');
   const [editCategory, setEditCategory] = useState('');
+  const [editFrameworkConfig, setEditFrameworkConfig] = useState({});
   const [filterActive, setFilterActive] = useState(null); // null = all, true = active only
   const [availableTools, setAvailableTools] = useState([]);
   const [toolsLoading, setToolsLoading] = useState(true);
@@ -97,10 +99,12 @@ export default function AgentsPage() {
     setEditToolConfigs(toolConfigs);
     setEditEnableShortTermPostgres(agent.memory?.short_term?.type === 'short_term_postgres');
     setEditTags(agent.tags?.join(', ') || '');
-    setEditMaxIterations(agent.max_iterations || 10);
+    setEditMaxIterations(agent.max_iterations || 5);
+    setEditTimeout(agent.timeout?.toString() || '');
     setEditStatus(agent.status || 'draft');
     setEditOwner(agent.owner || '');
     setEditCategory(agent.category || '');
+    setEditFrameworkConfig(agent.framework_config || {});
   };
 
   const handleSave = async (e) => {
@@ -145,9 +149,11 @@ export default function AgentsPage() {
       memory,
       tags: editTags ? editTags.split(',').map(t => t.trim()).filter(t => t) : [],
       max_iterations: editMaxIterations,
+      timeout: editTimeout ? parseFloat(editTimeout) : null,
       status: editStatus,
       owner: editOwner,
       category: editCategory,
+      framework_config: Object.keys(editFrameworkConfig).length > 0 ? editFrameworkConfig : {},
     };
 
     const { error: apiError } = await updateAgent(editingAgent.id, updateData);
@@ -529,13 +535,24 @@ export default function AgentsPage() {
                         onChange={(e) => setEditTags(e.target.value)}
                       />
 
-                      <NeoInput
-                        label="Max Iterations"
-                        type="number"
-                        value={editMaxIterations}
-                        onChange={(e) => setEditMaxIterations(parseInt(e.target.value))}
-                        min="1"
-                      />
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <NeoInput
+                          label="Max Iterations"
+                          type="number"
+                          value={editMaxIterations}
+                          onChange={(e) => setEditMaxIterations(parseInt(e.target.value))}
+                          min="1"
+                          max="6"
+                        />
+                        <NeoInput
+                          label="Timeout (seconds)"
+                          type="number"
+                          value={editTimeout}
+                          onChange={(e) => setEditTimeout(e.target.value)}
+                          placeholder="Optional"
+                          step="0.1"
+                        />
+                      </div>
 
                       <div className="flex gap-4 mt-6">
                         <NeoButton type="submit" variant="success" disabled={saving}>

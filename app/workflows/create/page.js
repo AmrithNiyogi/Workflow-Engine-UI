@@ -20,7 +20,7 @@ import NeoButton from '@/components/NeoButton';
 import NeoInput from '@/components/NeoInput';
 import NeoTextarea from '@/components/NeoTextarea';
 import NeoSelect from '@/components/NeoSelect';
-import { listAgents, createWorkflow, updateWorkflow, getWorkflow, createExecution, getExecution, executeWorkflowWithSSE, updateAgent, listTools } from '@/lib/api';
+import { listAgents, createWorkflow, updateWorkflow, getWorkflow, createExecution, getExecution, executeWorkflowWithSSE, updateAgent, listTools, getWorkflowAgent } from '@/lib/api';
 import { WORKFLOW_PATTERNS, FRAMEWORKS, CAPABILITIES } from '@/lib/constants';
 
 const nodeTypes = {
@@ -39,6 +39,7 @@ export default function CreateWorkflowPage() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   
   const [agents, setAgents] = useState([]);
+  const [workflowAgents, setWorkflowAgents] = useState([]); // Agents from the workflow (with id and parent_id)
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [executing, setExecuting] = useState(false);
@@ -54,6 +55,7 @@ export default function CreateWorkflowPage() {
   const [executionResults, setExecutionResults] = useState(null);
   const [enableSSE, setEnableSSE] = useState(true); // Toggle for SSE execution
   const [executionEvents, setExecutionEvents] = useState([]); // Real-time execution events
+  const [sessionId, setSessionId] = useState(''); // Session ID for maintaining conversation state
   
   const [searchTerm, setSearchTerm] = useState('');
   
@@ -71,7 +73,7 @@ export default function CreateWorkflowPage() {
   const [editToolConfigs, setEditToolConfigs] = useState({});
   const [editEnableShortTermPostgres, setEditEnableShortTermPostgres] = useState(false);
   const [editTags, setEditTags] = useState('');
-  const [editMaxIterations, setEditMaxIterations] = useState(10);
+  const [editMaxIterations, setEditMaxIterations] = useState(5);
   const [editStatus, setEditStatus] = useState('draft');
   const [editOwner, setEditOwner] = useState('');
   const [editCategory, setEditCategory] = useState('');
@@ -98,7 +100,9 @@ export default function CreateWorkflowPage() {
             setExecutionResults(null);
             setExecutionEvents([]);
 
-            const context = {};
+            const context = {
+              session_id: sessionId || null,
+            };
 
             try {
               if (enableSSE) {
@@ -228,12 +232,76 @@ export default function CreateWorkflowPage() {
     setEdges((eds) => eds.filter((edge) => edge.source !== nodeId && edge.target !== nodeId));
   }, [setNodes, setEdges]);
 
-  const handleNodeEdit = useCallback((nodeId, agentId) => {
-    const agent = agents.find(a => a.id === agentId);
+  const handleNodeEdit = useCallback(async (nodeId, agentId) => {
+    console.log(`handleNodeEdit called: nodeId=${nodeId}, agentId=${agentId}`);
+    console.log('Available workflow agents:', workflowAgents.map(a => ({ id: a.id, parent_id: a.parent_id, name: a.name })));
+    console.log('Workflow ID:', workflowId);
+    
+    // For workflow agents, we need to use the workflow agent's id (not parent_id) to fetch from API
+    // First, find the workflow agent that matches this agentId (could be workflow agent id or parent_id)
+    let workflowAgentId = null;
+    let agent = null;
+    
+    // If workflowAgents is empty but we have a workflowId, reload workflow first
+    let currentWorkflowAgents = workflowAgents;
+    if (workflowId && workflowAgents.length === 0) {
+      console.log('Workflow agents empty, reloading workflow first...');
+      try {
+        const { data: workflowData, error: reloadError } = await getWorkflow(workflowId);
+        if (!reloadError && workflowData && workflowData.agents) {
+          console.log('Reloaded workflow agents:', workflowData.agents.map(a => ({ id: a.id, parent_id: a.parent_id, name: a.name })));
+          setWorkflowAgents(workflowData.agents);
+          currentWorkflowAgents = workflowData.agents;
+        } else {
+          console.error('Error reloading workflow:', reloadError);
+        }
+      } catch (err) {
+        console.error('Error reloading workflow:', err);
+      }
+    }
+    
+    // Find the workflow agent - check if agentId is a workflow agent id or parent_id
+    const workflowAgent = currentWorkflowAgents.find(a => a.id === agentId) || 
+                          currentWorkflowAgents.find(a => a.parent_id === agentId);
+    
+    if (workflowAgent) {
+      workflowAgentId = workflowAgent.id; // Use the workflow agent's id
+      console.log(`Found workflow agent: id=${workflowAgent.id}, parent_id=${workflowAgent.parent_id}`);
+    } else if (currentWorkflowAgents.length === 1) {
+      // Fallback: if only one workflow agent, use it
+      workflowAgentId = currentWorkflowAgents[0].id;
+      console.log(`Using only workflow agent as fallback: ${workflowAgentId}`);
+    }
+    
+    // If we have a workflowId and workflowAgentId, fetch the agent using the API
+    if (workflowId && workflowAgentId) {
+      try {
+        console.log(`Fetching workflow agent from API: workflowId=${workflowId}, agentId=${workflowAgentId}`);
+        const { data: workflowAgentData, error } = await getWorkflowAgent(workflowId, workflowAgentId);
+        if (!error && workflowAgentData) {
+          agent = workflowAgentData;
+          console.log('Fetched from API:', agent);
+        } else {
+          console.error('API fetch error:', error);
+        }
+      } catch (err) {
+        console.error('Error fetching workflow agent:', err);
+      }
+    }
+    
+    // If still not found, try regular agents list (for new workflows or nodes not yet saved)
     if (!agent) {
-      setError(`Agent with ID ${agentId} not found`);
+      agent = agents.find(a => a.id === agentId);
+      console.log(`Search in regular agents by id ${agentId}:`, agent ? 'found' : 'not found');
+    }
+    
+    if (!agent) {
+      console.error(`Agent not found. agentId=${agentId}, workflowId=${workflowId}, workflowAgents count=${currentWorkflowAgents.length}`);
+      setError(`Agent with ID ${agentId} not found. If this is a workflow agent, the workflow may need to be reloaded.`);
       return;
     }
+    
+    console.log('Using agent:', { id: agent.id, parent_id: agent.parent_id, name: agent.name });
 
     setEditingAgent(agent);
     setEditName(agent.name || '');
@@ -259,11 +327,11 @@ export default function CreateWorkflowPage() {
     setEditToolConfigs(toolConfigs);
     setEditEnableShortTermPostgres(agent.memory?.short_term?.type === 'short_term_postgres');
     setEditTags(agent.tags?.join(', ') || '');
-    setEditMaxIterations(agent.max_iterations || 10);
+    setEditMaxIterations(agent.max_iterations || 5);
     setEditStatus(agent.status || 'draft');
     setEditOwner(agent.owner || '');
     setEditCategory(agent.category || '');
-  }, [agents]);
+  }, [agents, workflowAgents, workflowId]);
 
   const handleSaveAgent = async (e) => {
     e.preventDefault();
@@ -315,36 +383,92 @@ export default function CreateWorkflowPage() {
       category: editCategory,
     };
 
-    const { error: apiError } = await updateAgent(editingAgent.id, updateData);
+    // Check if this is a workflow agent (has parent_id) or a regular agent
+    const isWorkflowAgent = editingAgent.parent_id !== undefined && workflowId;
+    
+    if (isWorkflowAgent) {
+      // Update workflow agent - need to update the workflow with the updated agent config
+      const steps = convertToWorkflowSteps();
+      const updatedWorkflowAgents = workflowAgents.map(agent => {
+        if (agent.id === editingAgent.id) {
+          // Update this agent with the new data - use only agent_id, not parent_id
+          return {
+            ...updateData,
+            agent_id: editingAgent.id,
+          };
+        }
+        // Keep other agents as-is, but format them properly
+        return {
+          agent_id: agent.id,
+          name: agent.name,
+          framework: agent.framework,
+          system_prompt: agent.system_prompt,
+          description: agent.description || null,
+          llm_config: agent.llm_config,
+          capabilities: agent.capabilities,
+          tools: agent.tools,
+          tags: agent.tags || [],
+          memory: agent.memory,
+          framework_config: agent.framework_config || {},
+          max_iterations: agent.max_iterations || 5,
+          timeout: agent.timeout || null,
+          status: agent.status || 'draft',
+          owner: agent.owner || '',
+          category: agent.category || '',
+        };
+      });
 
-    setSaving(false);
+      const workflowData = {
+        agents: updatedWorkflowAgents,
+        steps: steps,
+      };
 
-    if (apiError) {
-      setError(apiError);
+      const { error: apiError } = await updateWorkflow(workflowId, workflowData);
+
+      setSaving(false);
+
+      if (apiError) {
+        setError(apiError);
+      } else {
+        setEditingAgent(null);
+        setSuccess('Workflow agent updated successfully!');
+        setTimeout(() => setSuccess(null), 3000);
+        // Reload workflow to get updated agents
+        await handleLoadWorkflow(workflowId);
+      }
     } else {
-      setEditingAgent(null);
-      setSuccess('Agent updated successfully!');
-      setTimeout(() => setSuccess(null), 3000);
-      // Reload agents to get updated data
-      const { data: agentsData } = await listAgents();
-      if (agentsData?.agents) {
-        setAgents(agentsData.agents);
-        // Update nodes with new agent data
-        setNodes((nds) => {
-          return nds.map((node) => {
-            if (node.data.agentId === editingAgent.id) {
-              return {
-                ...node,
-                data: {
-                  ...node.data,
-                  agentName: updateData.name,
-                  framework: updateData.framework,
-                },
-              };
-            }
-            return node;
+      // Update regular agent
+      const { error: apiError } = await updateAgent(editingAgent.id, updateData);
+
+      setSaving(false);
+
+      if (apiError) {
+        setError(apiError);
+      } else {
+        setEditingAgent(null);
+        setSuccess('Agent updated successfully!');
+        setTimeout(() => setSuccess(null), 3000);
+        // Reload agents to get updated data
+        const { data: agentsData } = await listAgents();
+        if (agentsData?.agents) {
+          setAgents(agentsData.agents);
+          // Update nodes with new agent data
+          setNodes((nds) => {
+            return nds.map((node) => {
+              if (node.data.agentId === editingAgent.id) {
+                return {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    agentName: updateData.name,
+                    framework: updateData.framework,
+                  },
+                };
+              }
+              return node;
+            });
           });
-        });
+        }
       }
     }
   };
@@ -409,6 +533,95 @@ export default function CreateWorkflowPage() {
   const onDragStart = (event, agent) => {
     event.dataTransfer.setData('application/reactflow', JSON.stringify(agent));
     event.dataTransfer.effectAllowed = 'move';
+  };
+
+  const convertToWorkflowAgents = () => {
+    // Get unique agent IDs from nodes (these should be workflow agent IDs if workflow is loaded)
+    const agentIds = [...new Set(nodes.map(node => node.data.agentId || node.data.workflowAgentId))].filter(id => id);
+    
+    if (agentIds.length === 0) {
+      throw new Error('At least one agent is required in the workflow');
+    }
+    
+    console.log('convertToWorkflowAgents - agentIds from nodes:', agentIds);
+    console.log('convertToWorkflowAgents - workflowAgents:', workflowAgents.map(a => ({ id: a.id, parent_id: a.parent_id, name: a.name })));
+    
+    // Build AgentCreateWorkflow objects - need all AgentCreate fields plus agent_id
+    const agentsData = agentIds.map(originalAgentId => {
+      let agentId = originalAgentId;
+      
+      // First try to find in workflow agents by id (these have id and parent_id)
+      let agent = workflowAgents.find(a => a.id === agentId);
+      
+      // If not found, try to find by parent_id (in case node still has parent_id stored)
+      if (!agent) {
+        agent = workflowAgents.find(a => a.parent_id === agentId);
+        if (agent) {
+          console.log(`Found workflow agent by parent_id: ${agentId} -> ${agent.id}`);
+          // Use the workflow agent id, not the parent_id
+          agentId = agent.id;
+        }
+      }
+      
+      // If still not found in workflow agents, try regular agents list (for new workflows)
+      if (!agent) {
+        agent = agents.find(a => a.id === agentId);
+      }
+      
+      if (!agent) {
+        throw new Error(`Agent with ID ${originalAgentId} not found. Please refresh the agents list.`);
+      }
+
+      // Validate required fields
+      if (!agent.name || !agent.framework || !agent.system_prompt || !agent.owner || !agent.category) {
+        throw new Error(`Agent ${agent.name || agentId} is missing required fields (name, framework, system_prompt, owner, or category)`);
+      }
+
+      // Build tools array - strings for tools without properties, objects for tools with properties
+      const agentTools = (agent.tools || []).map(tool => {
+        if (typeof tool === 'string') {
+          return tool;
+        } else if (tool && typeof tool === 'object' && tool.name) {
+          return {
+            name: tool.name,
+            config: tool.config || {}
+          };
+        }
+        return tool;
+      });
+
+      // Build memory configuration
+      const memory = agent.memory || undefined;
+
+      // Build framework_config
+      const frameworkConfig = agent.framework_config || {};
+
+      return {
+        agent_id: agentId,
+        // Never include parent_id in updates - it's only set by backend when agent is first added to workflow
+        name: agent.name,
+        framework: agent.framework,
+        system_prompt: agent.system_prompt,
+        description: agent.description || null,
+        llm_config: {
+          model: agent.llm_config?.model || '',
+          temperature: agent.llm_config?.temperature ?? 0.7,
+          max_tokens: agent.llm_config?.max_tokens || null,
+        },
+        capabilities: agent.capabilities || ['conversation'],
+        tools: agentTools,
+        tags: agent.tags || [],
+        memory: memory,
+        framework_config: frameworkConfig,
+        max_iterations: agent.max_iterations || 5,
+        timeout: agent.timeout || null,
+        status: agent.status || 'draft',
+        owner: agent.owner || '',
+        category: agent.category || '',
+      };
+    });
+
+    return agentsData;
   };
 
   const convertToWorkflowSteps = () => {
@@ -485,45 +698,56 @@ export default function CreateWorkflowPage() {
     setError(null);
     setSuccess(null);
 
-    const steps = convertToWorkflowSteps();
-    const agentIds = [...new Set(nodes.map(node => node.data.agentId))];
+    try {
+      const steps = convertToWorkflowSteps();
+      const agentsData = convertToWorkflowAgents();
 
-    // Backend expects agents as an array of strings (agent IDs), not objects
-    const agentsData = agentIds.filter(id => id); // Filter out any null/undefined values
+      // Ensure steps is always a valid array
+      const validSteps = Array.isArray(steps) ? steps : [];
 
-    // Ensure steps is always a valid array
-    const validSteps = Array.isArray(steps) ? steps : [];
-
-    const workflowData = {
+      const workflowData = {
       name: workflowName,
       description: workflowDescription || null,
       pattern: workflowPattern,
       agents: agentsData,
       steps: validSteps,
       visual_data: {
-        nodes: nodes.map(node => ({
-          id: node.id,
-          position: node.position,
-          type: node.type,
-          data: {
-            agentId: node.data.agentId,
-            agentName: node.data.agentName,
-            framework: node.data.framework,
-            task: node.data.task,
-          },
-        })),
+        nodes: nodes.map(node => {
+          // Ensure we're storing the workflow agent's id (not parent_id) in visual_data
+          let agentIdToStore = node.data.agentId || node.data.workflowAgentId;
+          
+          // If we have workflow agents, try to find the workflow agent and use its id
+          if (workflowAgents.length > 0 && agentIdToStore) {
+            const workflowAgent = workflowAgents.find(a => a.id === agentIdToStore) || 
+                                  workflowAgents.find(a => a.parent_id === agentIdToStore);
+            if (workflowAgent) {
+              agentIdToStore = workflowAgent.id; // Use workflow agent's id
+            }
+          }
+          
+          return {
+            id: node.id,
+            position: node.position,
+            type: node.type,
+            data: {
+              agentId: agentIdToStore, // Store workflow agent's id
+              agentName: node.data.agentName,
+              framework: node.data.framework,
+              task: node.data.task,
+            },
+          };
+        }),
         edges: edges.map(edge => ({
           id: edge.id,
           source: edge.source,
           target: edge.target,
         })),
       },
-      timeout: null, // Set to null instead of 0, or use a default value > 0
+      timeout: null,
       max_retries: workflowId ? 0 : 3,
       error_handling: 'stop',
-    };
+      };
 
-    try {
       let result;
       if (workflowId) {
         result = await updateWorkflow(workflowId, workflowData);
@@ -537,6 +761,11 @@ export default function CreateWorkflowPage() {
         setWorkflowId(result.data.id);
         setSuccess(`Workflow ${workflowId ? 'updated' : 'created'} successfully!`);
         setTimeout(() => setSuccess(null), 3000);
+        
+        // Reload workflow to get updated agents and update nodes with workflow agent IDs
+        if (result.data.id) {
+          await handleLoadWorkflow(result.data.id);
+        }
       }
     } catch (err) {
       setError(err.message || 'Failed to save workflow');
@@ -553,48 +782,55 @@ export default function CreateWorkflowPage() {
       }
       
       setSaving(true);
-      const steps = convertToWorkflowSteps();
-      const agentIds = [...new Set(nodes.map(node => node.data.agentId))];
+      try {
+        const steps = convertToWorkflowSteps();
+        const agentsData = convertToWorkflowAgents();
 
-      const workflowData = {
-        name: workflowName,
-        description: workflowDescription || null,
-        pattern: workflowPattern,
-        agents: agentIds,
-        steps: steps,
-        visual_data: {
-          nodes: nodes.map(node => ({
-            id: node.id,
-            position: node.position,
-            type: node.type,
-            data: {
-              agentId: node.data.agentId,
-              agentName: node.data.agentName,
-              framework: node.data.framework,
-              task: node.data.task,
-            },
-          })),
-          edges: edges.map(edge => ({
-            id: edge.id,
-            source: edge.source,
-            target: edge.target,
-          })),
-        },
-        timeout: null,
-        max_retries: 3,
-        error_handling: 'stop',
-      };
+        const workflowData = {
+          name: workflowName,
+          description: workflowDescription || null,
+          pattern: workflowPattern,
+          agents: agentsData,
+          steps: steps,
+          visual_data: {
+            nodes: nodes.map(node => ({
+              id: node.id,
+              position: node.position,
+              type: node.type,
+              data: {
+                agentId: node.data.agentId,
+                agentName: node.data.agentName,
+                framework: node.data.framework,
+                task: node.data.task,
+              },
+            })),
+            edges: edges.map(edge => ({
+              id: edge.id,
+              source: edge.source,
+              target: edge.target,
+            })),
+          },
+          timeout: null,
+          max_retries: 3,
+          error_handling: 'stop',
+        };
 
-      const saveResult = await createWorkflow(workflowData);
-      setSaving(false);
-      
-      if (saveResult.error) {
-        setError(saveResult.error);
+        const saveResult = await createWorkflow(workflowData);
+        setSaving(false);
+        
+        if (saveResult.error) {
+          setError(saveResult.error);
+          setSaving(false);
+          return;
+        }
+        
+        setWorkflowId(saveResult.data.id);
+        setSuccess('Workflow saved! Now executing...');
+      } catch (err) {
+        setSaving(false);
+        setError(err.message || 'Failed to prepare workflow for execution');
         return;
       }
-      
-      setWorkflowId(saveResult.data.id);
-      setSuccess('Workflow saved! Now executing...');
     }
 
     if (!validateWorkflow()) {
@@ -608,7 +844,9 @@ export default function CreateWorkflowPage() {
     setExecutionEvents([]); // Clear previous events
 
     // Collect context from nodes (if needed)
-    const context = {};
+    const context = {
+      session_id: sessionId || null,
+    };
 
     try {
       if (enableSSE) {
@@ -726,18 +964,96 @@ export default function CreateWorkflowPage() {
       setWorkflowDescription(data.description || '');
       setWorkflowPattern(data.pattern);
 
-      // Restore visual data if available
-      if (data.visual_data && data.visual_data.nodes) {
-        const restoredNodes = data.visual_data.nodes.map(node => ({
-          ...node,
-          data: {
-            ...node.data,
-            onTaskChange: handleTaskChange,
-            onDelete: handleNodeDelete,
-            onEdit: handleNodeEdit,
-          },
-        }));
-        setNodes(restoredNodes);
+      // Store workflow agents (these have id and parent_id)
+      if (data.agents && Array.isArray(data.agents)) {
+        setWorkflowAgents(data.agents);
+        
+        // Create a mapping from parent_id to workflow agent id
+        const parentIdToWorkflowAgentId = {};
+        // Also create reverse mapping from workflow agent id to parent_id for debugging
+        const workflowAgentIdToParentId = {};
+        data.agents.forEach(agent => {
+          if (agent.parent_id) {
+            parentIdToWorkflowAgentId[agent.parent_id] = agent.id;
+            workflowAgentIdToParentId[agent.id] = agent.parent_id;
+          }
+        });
+        
+        // Debug logging
+        console.log('Workflow agents loaded:', data.agents.map(a => ({ id: a.id, parent_id: a.parent_id, name: a.name })));
+        console.log('Parent ID to Workflow Agent ID mapping:', parentIdToWorkflowAgentId);
+        console.log('Visual data nodes:', data.visual_data?.nodes?.map(n => ({ id: n.id, agentId: n.data?.agentId })));
+
+        // Restore visual data if available and map agentIds to workflow agent IDs
+        if (data.visual_data && data.visual_data.nodes) {
+          const restoredNodes = data.visual_data.nodes.map(node => {
+            const nodeAgentId = node.data?.agentId;
+            let workflowAgentId = nodeAgentId;
+            
+            console.log(`Mapping node ${node.id}: original agentId = ${nodeAgentId}`);
+            
+            // First check if it's already a workflow agent id
+            const isWorkflowAgentId = data.agents.some(a => a.id === nodeAgentId);
+            
+            if (isWorkflowAgentId) {
+              // Already a workflow agent ID, use it
+              workflowAgentId = nodeAgentId;
+              console.log(`  -> Already workflow agent ID: ${workflowAgentId}`);
+            } else if (nodeAgentId && parentIdToWorkflowAgentId[nodeAgentId]) {
+              // Try to map parent_id to workflow agent id
+              workflowAgentId = parentIdToWorkflowAgentId[nodeAgentId];
+              console.log(`  -> Mapped from parent_id to workflow agent ID: ${workflowAgentId}`);
+            } else if (nodeAgentId) {
+              // Try to find by parent_id directly (even if parent_id is undefined/null in some cases)
+              const workflowAgent = data.agents.find(a => a.parent_id === nodeAgentId);
+              if (workflowAgent) {
+                workflowAgentId = workflowAgent.id;
+                console.log(`  -> Found workflow agent by parent_id: ${workflowAgentId}`);
+              } else {
+                // If no parent_id match, check if we can find by name or other means
+                // But most importantly, if there's only one agent and the node has an agentId,
+                // it might be the workflow agent itself
+                if (data.agents.length === 1 && data.agents[0].id) {
+                  // If there's only one agent, use its id
+                  workflowAgentId = data.agents[0].id;
+                  console.log(`  -> Using only workflow agent ID: ${workflowAgentId}`);
+                } else {
+                  console.warn(`  -> Could not map agentId ${nodeAgentId} to workflow agent ID. Available agents:`, data.agents.map(a => ({ id: a.id, parent_id: a.parent_id })));
+                }
+              }
+            }
+            
+            console.log(`  -> Final workflowAgentId: ${workflowAgentId}`);
+            
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                agentId: workflowAgentId, // Use workflow agent ID
+                workflowAgentId: workflowAgentId, // Store for reference
+                onTaskChange: handleTaskChange,
+                onDelete: handleNodeDelete,
+                onEdit: handleNodeEdit,
+              },
+            };
+          });
+          setNodes(restoredNodes);
+          console.log('Restored nodes with workflow agent IDs:', restoredNodes.map(n => ({ id: n.id, agentId: n.data.agentId })));
+        }
+      } else {
+        // No workflow agents, restore nodes as-is
+        if (data.visual_data && data.visual_data.nodes) {
+          const restoredNodes = data.visual_data.nodes.map(node => ({
+            ...node,
+            data: {
+              ...node.data,
+              onTaskChange: handleTaskChange,
+              onDelete: handleNodeDelete,
+              onEdit: handleNodeEdit,
+            },
+          }));
+          setNodes(restoredNodes);
+        }
       }
 
       if (data.visual_data && data.visual_data.edges) {
@@ -844,6 +1160,45 @@ export default function CreateWorkflowPage() {
                   </p>
                 </div>
               )}
+            </div>
+
+            <div className="mt-2">
+              <label className="block text-xs font-bold text-black mb-1">
+                Session ID (Optional - for conversation state persistence)
+              </label>
+              <div className="flex gap-2 items-center">
+                <input
+                  type="text"
+                  value={sessionId}
+                  onChange={(e) => setSessionId(e.target.value)}
+                  placeholder="Session ID (optional - for conversation state persistence)"
+                  className="flex-1 px-2 py-1 text-sm border-4 border-black bg-[#FFF8DC] text-black font-semibold focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newSessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                    setSessionId(newSessionId);
+                  }}
+                  className="px-3 py-1 border-4 border-black bg-[#90EE90] text-black font-bold hover:bg-[#7ED87E] transition-colors text-xs"
+                  title="Generate Session ID"
+                >
+                  🆔 Generate
+                </button>
+                {sessionId && (
+                  <button
+                    type="button"
+                    onClick={() => setSessionId('')}
+                    className="px-3 py-1 border-4 border-black bg-[#FFB6C1] text-black font-bold hover:bg-[#FF9BB0] transition-colors text-xs"
+                    title="Clear Session ID"
+                  >
+                    🗑️ Clear
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-black mt-1 font-semibold">
+                💡 Session ID maintains conversation state across workflow executions. Leave empty for stateless executions.
+              </p>
             </div>
           </div>
 
@@ -1265,7 +1620,9 @@ export default function CreateWorkflowPage() {
                   label="Max Iterations"
                   type="number"
                   value={editMaxIterations}
-                  onChange={(e) => setEditMaxIterations(parseInt(e.target.value) || 10)}
+                  onChange={(e) => setEditMaxIterations(parseInt(e.target.value) || 5)}
+                  min="1"
+                  max="6"
                 />
               </div>
 

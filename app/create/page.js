@@ -33,7 +33,7 @@ export default function CreateAgentPage() {
   const [mcpServers, setMcpServers] = useState({});
   const [enableShortTermPostgres, setEnableShortTermPostgres] = useState(false);
   const [tags, setTags] = useState('');
-  const [maxIterations, setMaxIterations] = useState(10);
+  const [maxIterations, setMaxIterations] = useState(5);
   const [timeout, setTimeout] = useState('');
   const [status, setStatus] = useState('draft');
   const [owner, setOwner] = useState('');
@@ -145,7 +145,7 @@ export default function CreateAgentPage() {
       status,
       owner,
       category,
-      framework_config: Object.keys(frameworkConfig).length > 0 ? frameworkConfig : undefined,
+      framework_config: Object.keys(frameworkConfig).length > 0 ? frameworkConfig : {},
     };
 
     const { data, error: apiError } = await createAgent(agentData);
@@ -504,6 +504,7 @@ export default function CreateAgentPage() {
               value={maxIterations}
               onChange={(e) => setMaxIterations(parseInt(e.target.value))}
               min="1"
+              max="6"
             />
             <NeoInput
               label="Timeout (seconds)"
