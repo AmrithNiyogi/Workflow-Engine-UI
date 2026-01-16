@@ -78,6 +78,9 @@ export default function ChatBot({ agentId, frameworkOverride, sessionId, onSendM
       let finalError = null;
 
       await executeAgentWithLogs(agentId, executeRequest, (eventType, data) => {
+        // Debug logging
+        console.log('[ChatBot] Received event:', { eventType, dataType: data?.type, hasContent: !!data?.content, data });
+        
         // Update the message with thinking logs in real-time
         setMessages(prev => {
           return prev.map(msg => {
@@ -85,53 +88,68 @@ export default function ChatBot({ agentId, frameworkOverride, sessionId, onSendM
             
             const updatedLogs = [...(msg.thinkingLogs || [])];
             
-            // Handle different event types
+            // Handle different event types (support both prefixed and non-prefixed versions)
             switch (eventType) {
+              case 'agent_thinking':
               case 'thinking':
                 updatedLogs.push({
                   type: 'thought',
-                  content: data.content,
+                  content: data.content || data.thought || data.message,
                   timestamp: data.timestamp,
                 });
                 break;
               
+              case 'agent_action':
               case 'action':
-                // Check if this is action_input or action
+                // Check if this is an action_input based on data.type
                 if (data.type === 'action_input') {
                   updatedLogs.push({
                     type: 'action_input',
-                    content: data.content,
-                    tool: data.metadata?.tool,
-                    input: data.metadata?.input,
+                    content: data.content || data.input || data.message,
+                    tool: data.metadata?.tool || data.tool,
+                    input: data.metadata?.input || data.input,
                     timestamp: data.timestamp,
                   });
                 } else {
                   updatedLogs.push({
                     type: 'action',
-                    content: data.content,
-                    tool: data.metadata?.tool,
+                    content: data.content || data.action || data.message,
+                    tool: data.metadata?.tool || data.tool,
                     timestamp: data.timestamp,
                   });
                 }
                 break;
               
-              case 'observation':
+              case 'agent_action_input':
+              case 'action_input':
                 updatedLogs.push({
-                  type: 'observation',
-                  content: data.content,
+                  type: 'action_input',
+                  content: data.content || data.input || data.message,
+                  tool: data.metadata?.tool || data.tool,
+                  input: data.metadata?.input || data.input,
                   timestamp: data.timestamp,
                 });
                 break;
               
+              case 'agent_observation':
+              case 'observation':
+                updatedLogs.push({
+                  type: 'observation',
+                  content: data.content || data.observation || data.message,
+                  timestamp: data.timestamp,
+                });
+                break;
+              
+              case 'agent_final_answer':
               case 'final_answer':
                 updatedLogs.push({
                   type: 'final_answer',
-                  content: data.content,
+                  content: data.content || data.answer || data.message,
                   timestamp: data.timestamp,
                 });
                 return {
                   ...msg,
-                  content: data.content,
+                  content: data.content || data.answer || data.message,
                   thinkingLogs: updatedLogs,
                   loading: false,
                   success: true,
@@ -166,10 +184,18 @@ export default function ChatBot({ agentId, frameworkOverride, sessionId, onSendM
                 };
             }
             
-            return {
+            const updatedMessage = {
               ...msg,
               thinkingLogs: updatedLogs,
             };
+            
+            console.log('[ChatBot] Updating message with logs:', {
+              eventType,
+              logCount: updatedLogs.length,
+              lastLogType: updatedLogs[updatedLogs.length - 1]?.type,
+            });
+            
+            return updatedMessage;
           });
         });
       });

@@ -20,7 +20,7 @@ import NeoButton from '@/components/NeoButton';
 import NeoInput from '@/components/NeoInput';
 import NeoTextarea from '@/components/NeoTextarea';
 import NeoSelect from '@/components/NeoSelect';
-import { listAgents, createWorkflow, updateWorkflow, getWorkflow, createExecution, getExecution, executeWorkflowWithSSE, updateAgent, listTools } from '@/lib/api';
+import { listAgents, createWorkflow, updateWorkflow, getWorkflow, createExecution, getExecution, executeWorkflowWithSSE, updateAgent, listTools, cancelExecution } from '@/lib/api';
 import { WORKFLOW_PATTERNS, FRAMEWORKS, CAPABILITIES } from '@/lib/constants';
 
 const nodeTypes = {
@@ -52,7 +52,7 @@ export default function CreateWorkflowPage() {
   const [executionId, setExecutionId] = useState(null);
   const [executionStatus, setExecutionStatus] = useState(null);
   const [executionResults, setExecutionResults] = useState(null);
-  const [enableSSE, setEnableSSE] = useState(true); // Toggle for SSE execution
+  const [enableSSE, setEnableSSE] = useState(false); // Toggle for SSE execution (default to /executions)
   const [executionEvents, setExecutionEvents] = useState([]); // Real-time execution events
   const [sessionId, setSessionId] = useState(''); // Session ID for maintaining conversation state
   
@@ -85,83 +85,9 @@ export default function CreateWorkflowPage() {
     
     // Load workflow from URL if workflowId is provided
     const workflowIdParam = searchParams.get('workflowId');
-    const shouldExecute = searchParams.get('execute') === 'true';
     
     if (workflowIdParam) {
-      handleLoadWorkflow(workflowIdParam).then(() => {
-        if (shouldExecute) {
-          // Wait for state to update, then execute
-          setTimeout(async () => {
-            // Execute directly with the workflowId since we know it's loaded
-            setExecuting(true);
-            setError(null);
-            setExecutionStatus('pending');
-            setExecutionResults(null);
-            setExecutionEvents([]);
-
-            const context = {
-              session_id: sessionId || null,
-            };
-
-            try {
-              if (enableSSE) {
-                // Use SSE execution
-                await executeWorkflowWithSSE(workflowIdParam, context, (eventType, data) => {
-                  setExecutionEvents(prev => [...prev, { eventType, data, timestamp: new Date().toISOString() }]);
-                  
-                  switch (eventType) {
-                    case 'workflow_started':
-                      setExecutionId(data.execution_id);
-                      setExecutionStatus('running');
-                      break;
-                    case 'workflow_completed':
-                      setExecutionStatus('completed');
-                      setExecuting(false);
-                      if (data.execution_id) {
-                        getExecution(data.execution_id).then(({ data: execData }) => {
-                          if (execData) {
-                            setExecutionResults(execData);
-                          }
-                        });
-                      }
-                      break;
-                    case 'workflow_failed':
-                      setExecutionStatus('failed');
-                      setExecuting(false);
-                      setError(data.error || 'Workflow execution failed');
-                      if (data.execution_id) {
-                        getExecution(data.execution_id).then(({ data: execData }) => {
-                          if (execData) {
-                            setExecutionResults(execData);
-                          }
-                        });
-                      }
-                      break;
-                    case 'error':
-                      setError(data.error || 'An error occurred');
-                      setExecuting(false);
-                      break;
-                  }
-                });
-              } else {
-                // Use regular execution
-                const result = await createExecution(workflowIdParam, context);
-                
-                if (result.error) {
-                  setError(result.error);
-                  setExecuting(false);
-                } else {
-                  setExecutionId(result.data.id);
-                  setExecutionStatus(result.data.status);
-                }
-              }
-            } catch (err) {
-              setError(err.message || 'Failed to execute workflow');
-              setExecuting(false);
-            }
-          }, 1000);
-        }
-      });
+      handleLoadWorkflow(workflowIdParam);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -423,63 +349,16 @@ export default function CreateWorkflowPage() {
       throw new Error('At least one agent is required in the workflow');
     }
     
-    // Build AgentCreateWorkflow objects - need all AgentCreate fields plus agent_id
-    const agentsData = agentIds.map(agentId => {
+    // Validate that all agents exist
+    agentIds.forEach(agentId => {
       const agent = agents.find(a => a.id === agentId);
-      
       if (!agent) {
         throw new Error(`Agent with ID ${agentId} not found. Please refresh the agents list.`);
       }
-
-      // Validate required fields
-      if (!agent.name || !agent.framework || !agent.system_prompt || !agent.owner || !agent.category) {
-        throw new Error(`Agent ${agent.name || agentId} is missing required fields (name, framework, system_prompt, owner, or category)`);
-      }
-
-      // Build tools array - strings for tools without properties, objects for tools with properties
-      const agentTools = (agent.tools || []).map(tool => {
-        if (typeof tool === 'string') {
-          return tool;
-        } else if (tool && typeof tool === 'object' && tool.name) {
-          return {
-            name: tool.name,
-            config: tool.config || {}
-          };
-        }
-        return tool;
-      });
-
-      // Build memory configuration
-      const memory = agent.memory || undefined;
-
-      // Build framework_config
-      const frameworkConfig = agent.framework_config || {};
-
-      return {
-        agent_id: agentId,
-        name: agent.name,
-        framework: agent.framework,
-        system_prompt: agent.system_prompt,
-        description: agent.description || null,
-        llm_config: {
-          model: agent.llm_config?.model || '',
-          temperature: agent.llm_config?.temperature ?? 0.7,
-          max_tokens: agent.llm_config?.max_tokens || null,
-        },
-        capabilities: agent.capabilities || ['conversation'],
-        tools: agentTools,
-        tags: agent.tags || [],
-        memory: memory,
-        framework_config: frameworkConfig,
-        max_iterations: agent.max_iterations || 5,
-        timeout: agent.timeout || null,
-        status: agent.status || 'draft',
-        owner: agent.owner || '',
-        category: agent.category || '',
-      };
     });
 
-    return agentsData;
+    // Backend expects agents as an array of agent ID strings
+    return agentIds;
   };
 
   const convertToWorkflowSteps = () => {
@@ -613,6 +492,34 @@ export default function CreateWorkflowPage() {
     }
   };
 
+  const handleCancelExecution = async () => {
+    if (!executionId) {
+      setError('No execution to cancel');
+      return;
+    }
+
+    try {
+      const result = await cancelExecution(executionId);
+      
+      if (result.error) {
+        setError(result.error);
+      } else {
+        setExecutionStatus('cancelled');
+        setExecuting(false);
+        setSuccess('Execution cancelled successfully');
+        setTimeout(() => setSuccess(null), 3000);
+        // Fetch updated execution results
+        getExecution(executionId).then(({ data: execData }) => {
+          if (execData) {
+            setExecutionResults(execData);
+          }
+        });
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to cancel execution');
+    }
+  };
+
   const handleExecute = async () => {
     if (!workflowId) {
       // Auto-save if not saved yet
@@ -711,6 +618,20 @@ export default function CreateWorkflowPage() {
               break;
             case 'agent_failed':
               // Agent failed
+              break;
+            // Handle agent streaming log events (support both prefixed and non-prefixed versions)
+            case 'agent_thinking':
+            case 'thinking':
+            case 'agent_action':
+            case 'action':
+            case 'agent_action_input':
+            case 'agent_observation':
+            case 'observation':
+            case 'agent_final_answer':
+            case 'final_answer':
+              // These events are already added to executionEvents list above
+              // They will be displayed in the execution events UI
+              // Note: action_input comes as event:action with data.type="action_input"
               break;
             case 'workflow_completed':
               setExecutionStatus('completed');
@@ -870,6 +791,15 @@ export default function CreateWorkflowPage() {
                 >
                   {executing ? 'Executing...' : '▶️ Execute'}
                 </NeoButton>
+                {executing && executionId && (
+                  <NeoButton
+                    variant="danger"
+                    onClick={handleCancelExecution}
+                    className="px-2 py-1 text-xs"
+                  >
+                    ⏹️ Cancel
+                  </NeoButton>
+                )}
               </div>
             </div>
 
